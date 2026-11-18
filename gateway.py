@@ -37,17 +37,32 @@ class Mestre:
     port[1] por %5B1%5D, e o servidor embarcado do mestre pode nao decodificar.
     """
 
-    def __init__(self, base_url, timeout=2.0):
+    def __init__(self, base_url, timeout=2.0, sensor_urls=None):
         u = urlparse(base_url)
         self.host, self.porta_http, self.timeout = u.hostname, u.port or 80, timeout
+        self.sensor_urls = sensor_urls or {}
+        self.sessao = requests.Session()
         self.conn = None
 
     def ler_bruto(self, porta):
+        # Quando sensor_urls existir, porta pode ser o nome ('capacitivo',
+        # 'indutivo' ou 'distancia') e o gateway chama exatamente a URL REST.
+        if isinstance(porta, str) and porta in self.sensor_urls:
+            r = self.sessao.get(self.sensor_urls[porta], timeout=self.timeout)
+            r.raise_for_status()
+            try:
+                corpo = r.json()
+            except requests.JSONDecodeError:
+                corpo = {"value": r.text.strip()}
+            if not isinstance(corpo, dict):
+                corpo = {"value": corpo}
+            return corpo
+
         caminho = f"/iolinkmaster/port[{porta}]/iolinkdevice/pdin/getdata"
         for tentativa in (1, 2):  # a 2a tentativa reabre uma conexao keep-alive caida
             try:
                 if self.conn is None:
-                    self.conn = http.client.HTTPConnection(self.host, self.porta_http, timeout=self.timeout)
+                    self.conn = http.client.HTTPConnection(self.host, self.porta_http, timeout=self.timeout) # busca conexão HTTP com o IO-Link Master
                 self.conn.request("GET", caminho)
                 resp = self.conn.getresponse()
                 corpo = resp.read()
@@ -62,9 +77,26 @@ class Mestre:
 
     def ler_inteiro(self, porta):
         corpo = self.ler_bruto(porta)
-        if corpo.get("code") not in (200, "200") or "data" not in corpo:
-            raise ValueError(f"IO-Link code {corpo.get('code')} na porta {porta}")
-        return int(corpo["data"]["value"], 16)
+
+        dados = corpo.get("data") if isinstance(corpo, dict) else None
+        if isinstance(dados, dict) and "value" in dados:
+            valor = dados["value"]
+        elif isinstance(corpo, dict) and "value" in corpo:
+            valor = corpo["value"]
+        elif corpo.get("code") not in (200, "200") if isinstance(corpo, dict) else False:
+            raise ValueError(f"sensor {porta} respondeu code {corpo.get('code')}")
+        else:
+            raise ValueError(f"sensor {porta} nao retornou um valor")
+
+        if isinstance(valor, (int, float)):
+            return int(valor)
+        texto = str(valor).strip().lower()
+        if texto.startswith("0x"):
+            return int(texto, 16)
+        try:
+            return int(texto, 10)
+        except ValueError:
+            return int(texto, 16)
 
 
 def liga_capacitivo(ativo, v, c):
@@ -186,10 +218,10 @@ def validar_config(cfg, dry_run):
 
 def executar(cfg, dry_run):
     validar_config(cfg, dry_run)
-    mestre = Mestre(cfg["mestre_url"])
+    mestre = Mestre(cfg["mestre_url"], sensor_urls=cfg.get("sensor_urls"))
     portas, sens, dist_cfg = cfg["portas"], cfg["sensores"], cfg["distancia"]
     janela = cfg["classificacao"]["janela_s"]
-    dt = cfg["intervalo_leitura_s"]
+    dt = cfg["intervalo_leitura_s"]  # intervalo entre leituras (nao entre envios)
     heartbeat = cfg.get("heartbeat_s", 0)
 
     fila = queue.Queue(maxsize=5000)
@@ -274,7 +306,7 @@ def executar(cfg, dry_run):
 
 
 def sondar(cfg):
-    mestre = Mestre(cfg["mestre_url"])
+    mestre = Mestre(cfg["mestre_url"], sensor_urls=cfg.get("sensor_urls"))
     for nome, porta in cfg["portas"].items():
         try:
             bruto = mestre.ler_bruto(porta)

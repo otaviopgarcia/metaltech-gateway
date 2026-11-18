@@ -1,9 +1,14 @@
 {
-    "mestre_url": "http://10.110.12.41",
+    "mestre_url": "http://10.110.12.76:5000",
+    "sensor_urls": {
+        "capacitivo": "http://10.110.12.76:5000/sensores/capacitivo",
+        "indutivo": "http://10.110.12.76:5000/sensores/indutivo",
+        "distancia": "http://10.110.12.76:5000/sensores/distancia"
+    },
     "portas": {
-        "distancia": 1,
-        "indutivo": 2,
-        "capacitivo": 3
+        "distancia": "distancia",
+        "capacitivo": "capacitivo",
+        "indutivo": "indutivo"
     },
     "sensores": {
         "capacitivo": {
